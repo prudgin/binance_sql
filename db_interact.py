@@ -9,14 +9,6 @@ import helpers
 This module contains a ConnectionDB class, that holds multiple methods, used to interact with a database.
 """
 
-# Configure logging
-logging.basicConfig(
-    format="%(asctime)s %(levelname)s:%(name)s: %(message)s",
-    level=logging.WARNING,
-    datefmt="%H:%M:%S",
-    stream=sys.stderr
-)
-
 logger = logging.getLogger(__name__)
 
 
@@ -38,6 +30,23 @@ class ConnectionDB:
         # Can exequte SQL queries
         self.conn_cursor = None
         self.connected = False
+        # SQL table structure that will be created
+        self.data_structure = [
+            ['id', 'INT', 'AUTO_INCREMENT PRIMARY KEY'],
+            ['open_time', 'BIGINT', 'NOT NULL UNIQUE'],
+            ['open', 'DOUBLE(15,8)', 'NOT NULL'],
+            ['high', 'DOUBLE(15,8)', 'NOT NULL'],
+            ['low', 'DOUBLE(15,8)', 'NOT NULL'],
+            ['close', 'DOUBLE(15,8)', 'NOT NULL'],
+            ['volume', 'DOUBLE(25,8)', 'NOT NULL'],
+            ['close_time', 'BIGINT', 'NOT NULL UNIQUE'],
+            ['quote_vol', 'DOUBLE(25,8)', 'NOT NULL'],
+            ['num_trades', 'BIGINT', 'NOT NULL'],
+            ['buy_base_vol', 'DOUBLE(25,8)', 'NOT NULL'],
+            ['buy_quote_vol', 'DOUBLE(25,8)', 'NOT NULL'],
+            ['ignored', 'DOUBLE(15,8)', ''],
+            ['time_loaded', 'BIGINT']
+        ]
 
     def __str__(self):
         return f'This is an instance of ConnectionDB class,' \
@@ -67,11 +76,12 @@ class ConnectionDB:
         except mysql_connector.Error as err:
             err_message = 'error while connecting to a database'
             logger.error(f'{err_message} {self.database}; {err}')
-            raise exceptions.SQLError(err, err_message)
+            return None
         else:
             self.conn_cursor = self.conn.cursor()
             logger.debug(f'connected to database {self.database}')
             self.connected = True
+            return True
 
     def close_connection(self):
         if self.connected:
@@ -122,23 +132,21 @@ class ConnectionDB:
         show_query = f'SHOW TABLES LIKE \'{table_name}\''
         return self.execute_query(show_query, fetch_all=True)
 
-    def table_create(self, table_name: str, data_structure: list):
-        """
-        :param table_name: name of the table to be created
-        :param data_structure: table structure e.g.:
-        [
-            ['id', 'INT', 'AUTO_INCREMENT PRIMARY KEY'],
-            ['open_time', 'BIGINT', 'NOT NULL UNIQUE'],
-            ...
-        ]
-        """
-        table_struct_string = ',\n'.join([' '.join(i) for i in data_structure])
-        create_new_table_query = f"""
-                                CREATE TABLE {table_name} (
-                                {table_struct_string}
-                                )
-                                """
-        return self.execute_query(create_new_table_query, commit=True)
+    def table_create(self, table_name: str):
+        #  check if table present
+        if not self.table_in_db(table_name):
+            logger.debug(f'not found table {table_name}, creating one')
+
+            table_struct_string = ',\n'.join([' '.join(i) for i in self.data_structure])
+            create_new_table_query = f"""
+                                    CREATE TABLE {table_name} (
+                                    {table_struct_string}
+                                    )
+                                    """
+            return self.execute_query(create_new_table_query, commit=True)
+        return True #  table already in database
+
+
 
     def table_delete(self, table_name: str):
         if self.table_in_db(table_name):
@@ -193,12 +201,12 @@ class ConnectionDB:
                 last_entry = last_entry[0]
         return [first_entry, last_entry, count]
 
-    def write(self, data, table_name, data_structure):
+    def write(self, data, table_name):
         if not self.connected:
             logger.error(f'cannot execute query: {query}, not connected to a database, run .connect() first')
             return None
         else:
-            headers_list = [i[0] for i in data_structure][1:]
+            headers_list = [i[0] for i in self.data_structure][1:]
             headers_string = ', '.join(headers_list)
             helper_string = ' ,'.join(['%s'] * len(headers_list))
             insert_query = f"""
