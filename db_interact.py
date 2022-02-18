@@ -144,9 +144,7 @@ class ConnectionDB:
                                     )
                                     """
             return self.execute_query(create_new_table_query, commit=True)
-        return True #  table already in database
-
-
+        return True  # table already in database
 
     def table_delete(self, table_name: str):
         if self.table_in_db(table_name):
@@ -221,6 +219,7 @@ class ConnectionDB:
                 err_message = 'error writing data into table'
                 logger.error(f'{err_message} {table_name}, {err}')
                 return None
+            return True
 
     def read(self, table_name, start_ts, end_ts, time_col_name='open_time', reversed_order=True):
         """returns candles from database in a form of
@@ -264,7 +263,6 @@ class ConnectionDB:
                     WHERE {time_col_name} BETWEEN {start} AND {end}
                 """
         last_entry = self.execute_query(query, fetch_one=True)
-
 
         # if there are no records between start and end, we will recieve: (None,)
         if last_entry and last_entry[0] is None:

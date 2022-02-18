@@ -27,7 +27,7 @@ if __name__ == '__main__':
     conn_db.connect()
 
     # print(conn_db.list_databases())
-    #conn_db.table_delete('BTCUSDT1mHist')
+    conn_db.table_delete('BTCUSDT1dHist')
 
     conn_db.close_connection()
 
@@ -38,20 +38,20 @@ if __name__ == '__main__':
     # https://stackoverflow.com/questions/1316767/how-can-i-explicitly-free-memory-in-python
 
     tracemalloc.start()
-    candle_getter = ghd.data_download_store('BTCUSDT', '1m')
+    candle_getter = ghd.data_download_store('BTCUSDT', '1d')
     fetch = candle_getter.get_candles(start_ts=1543104000000,
                                     end_ts=1543104000000 - 1 + 60000 * 60 * 1000)
-    print(fetch)
-    for candle in fetch:
-        print(f'open time: {hlp.ts_to_date(candle[0])};'
-              f'close time: {hlp.ts_to_date(candle[6])}; '
-              f'len: {round((candle[6] - candle[0]) / (1000 * 60 * 60 * 24))}; ')
+    #print(fetch)
+    # for candle in fetch:
+    #     print(f'open time: {hlp.ts_to_date(candle[0])};'
+    #           f'close time: {hlp.ts_to_date(candle[6])}; '
+    #           f'len: {round((candle[6] - candle[0]) / (1000 * 60 * 60 * 24))}; ')
 
     # del fetched_candles
     # gc.collect()
 
     current, peak = tracemalloc.get_traced_memory()
-    print(f"Current memory usage is {current / 10 ** 6}MB; Peak was {peak / 10 ** 6}MB")
+    print(f"Main. Current memory usage is {current / 10 ** 6}MB; Peak was {peak / 10 ** 6}MB")
     tracemalloc.stop()
 
     print(f'it took {time.perf_counter() - start}')

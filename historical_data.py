@@ -3,24 +3,24 @@ import logging
 import sys
 import time
 from decimal import Decimal
-
 import aiohttp
+
+from binance import exceptions as pybin_exceptions
+from binance.client import AsyncClient, Client
+
 import db_interact as db
 import exceptions
 import spooky
-from binance import exceptions as pybin_exceptions
-from binance.client import AsyncClient, Client
 import helpers
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s:%(name)s: %(message)s",
-    level=logging.DEBUG,
+    level=logging.WARNING,
     datefmt="%H:%M:%S",
     stream=sys.stderr
 )
 
 logger = logging.getLogger(__name__)
-
 
 
 class data_download_store:
@@ -47,7 +47,6 @@ class data_download_store:
 
         self.symbol = symbol
 
-
         # table names for each symbol and interval are created this way:
         self.table_name = f'{symbol}{interval}Hist'
 
@@ -55,16 +54,17 @@ class data_download_store:
         self.max_coroutines = max_coroutines
         self.exchange_client = None
 
-        # self.rounded_sum = 0
-        # self.missing_sum = 0
-        # self.candles_loaded = 0
+        self.rounded_sum = 0
+        self.missing_sum = 0
+        self.candles_loaded = 0
 
     def cleanup(self):
         if self.conn_db:
             self.conn_db.close_connection()
         if self.exchange_client:
             async def close_client():
-                await exchange_client.close_connection()
+                await self.exchange_client.close_connection()
+
             asyncio.run(close_client())
 
     def prepare_initial_conditions(self, start_ts: int, end_ts: int, delete_existing_table):
@@ -145,6 +145,7 @@ class data_download_store:
         this function raises no exceptions, tries to catch all, and returns None if exception
         interval_to_milliseconds : None
         """
+
         fetch = None
         self.prepare_initial_conditions(start_ts, end_ts, delete_existing_table)
 
@@ -153,6 +154,10 @@ class data_download_store:
             logger.error('get_gaps function returned None')
             self.cleanup()
             return None
+
+        # get when last entry was added to the table, need this for printing report of how many candles were written
+        # in case of error returns 0
+        last_entry_id = self.conn_db.get_latest_id(self.table_name)
 
         if gaps:  # if there are gaps in a period of interest
             print(' found gaps:')
@@ -168,9 +173,6 @@ class data_download_store:
                     self.cleanup()
                     return None
 
-        # get when last entry was added to the table, need this for printing report of how many candles were written
-        # in case of error returns 0
-        last_entry_id = self.conn_db.get_latest_id(self.table_name)
         _, _, count_written = self.conn_db.get_start_end_later_than(self.table_name, last_entry_id, only_count=True)
         if count_written:
             print(f'wrote {count_written} candles to db')
@@ -182,9 +184,11 @@ class data_download_store:
             print(f'fetched {len(fetch)} candles from the database')
 
         self.cleanup()
+
         return fetch
 
     async def get_write_candles(self, gap_start, gap_end):
+
         #  return None if fails, else return True
 
         #  Create the Binance client, no need for api key.
@@ -194,6 +198,9 @@ class data_download_store:
             logger.error(f'ClientConnectorCertificateError: {err}, try importing aiohttp prior to everything else')
             self.cleanup()
             return None
+
+        # get when last entry was added to the table, need this to print out a final report
+        last_entry_id = self.conn_db.get_latest_id(self.table_name)
 
         #  break the timeline of interest into periods, each period will get it's own concurrent worker
         periods = self.get_limit_intervals(gap_start, gap_end)
@@ -217,9 +224,6 @@ class data_download_store:
                   f'   Consider lowering max_coroutines parameter in get_candles_from_db function.')
             i += 1
             periods = timeout_gaps
-
-        # get when last entry was added to the table, need this to print out a final report
-        last_entry_id = self.conn_db.get_latest_id(self.table_name)
 
         print('   gap summary:')
         first_written, last_written, count_written = self.conn_db.get_start_end_later_than(self.table_name,
@@ -252,6 +256,7 @@ class data_download_store:
         return intervals
 
     async def gather_write_candles(self, periods):
+
         sem = asyncio.Semaphore(self.max_coroutines)
 
         async def sem_task(task):
@@ -310,6 +315,7 @@ class data_download_store:
                 return (None, timeout_gap)
 
     async def download_candles(self, period_start, period_end):
+
         """
             candles with open_time >= start_ts included
             candles with open_time <= end_ts included
