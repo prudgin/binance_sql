@@ -21,7 +21,7 @@ You will need [MySql](https://dev.mysql.com/doc/refman/5.7/en/installing.html)
 And [mysql-connector-python](https://github.com/mysql/mysql-connector-python)  
 Here is [the link](https://realpython.com/python-mysql/#installing-mysql-server-and-mysql-connectorpython) to a realpython.com article, that will walk you through the installation and setup.  
 Also, a [nice article](https://dev.mysql.com/doc/mysql-getting-started/en/) from mysql.com about getting started with MySQL.  
-Basically, all you need is to install MySQL server and set up host, user and password. Database creation can be done via python script, as shown in example.com  
+Basically, all you need is to install MySQL server and set up host, user and password. Database creation can be done via python script, as shown in example.py  
 Tables are created automatically, for example for a BTC-USDT pair on 1 hour interval a table named 'BTCUSDT1hHist' will be created. Hist is for historical.  
 ## Installation  
 Just download module folder and import into your python script.  
