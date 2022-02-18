@@ -13,6 +13,16 @@ import exceptions
 import spooky
 import helpers
 
+"""
+This module downloads historical data from binance via API, writes it to the MySQL database, then returns data.
+The downloading occurs concurrently, using asyncio.
+To get data one should run get_candles method, specifying start and end of period of interest.
+The central idea is to first check if requested data is in the database. But data in DB can be fragmented, e.g.
+we can have data from 1 September to 5 Sep, then from 10 Sep to 15 Sep and so on.
+In order to deal with gaps, we search for them with a tricky SQL request. Then, we iterate over gaps and download data.
+After all gaps have been filled, data is fetched from the database and returned to the user.
+"""
+
 logging.basicConfig(
     format="%(asctime)s %(levelname)s:%(name)s: %(message)s",
     level=logging.WARNING,
@@ -23,27 +33,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class data_download_store:
+class data_manager:
     """
-    This class is huge.
-    It stores data, it downloads data, it returns data upon request.
+    This stores data, downloads data and returns data upon request.
     """
 
     def __init__(self,
-                 symbol: str,
-                 interval: str,
-                 limit=500,
-                 max_coroutines=10):
+                 symbol: str,  # BTCUSDT for example
+                 interval: str,  # 1d or 1h or else
+                 limit=500,  # number of candles downloaded per API request
+                 max_coroutines=10):  # max simultaniously running concurrent workers, who download data
 
         self.interval = interval
         self.interval_ms = helpers.interval_to_milliseconds(interval)
         if self.interval_ms is None:
             raise ValueError('Bad interval. Shold be string like 1h, 1m, 1d and so on.')
-
-        self.conn_db = db.ConnectionDB(host=spooky.creds['host'],
-                                       user=spooky.creds['user'],
-                                       password=spooky.creds['password'],
-                                       database=spooky.creds['database'])
 
         self.symbol = symbol
 
@@ -58,6 +62,9 @@ class data_download_store:
         self.missing_sum = 0
         self.candles_loaded = 0
 
+    def set_database_credentials(self, host: str, user: str, password: str, database: str):
+        self.conn_db = db.ConnectionDB(host=host, user=user, password=password, database=database)
+
     def cleanup(self):
         if self.conn_db:
             self.conn_db.close_connection()
@@ -67,14 +74,12 @@ class data_download_store:
 
             asyncio.run(close_client())
 
-    def prepare_initial_conditions(self, start_ts: int, end_ts: int, delete_existing_table):
+    def prepare_initial_conditions(self, start_ts: int, end_ts: int, delete_existing_table: bool):
         """
         adjust start and end time and create table in database if abscent
-        :param start_ts:
-        :param end_ts:
-        :param delete_existing_table:
-        :return:
         """
+        if not hasattr(self, 'conn_db'):
+            raise AttributeError('Run set_database_credentials() first')
 
         print(f'requested candles from {start_ts} {helpers.ts_to_date(start_ts)} to '
               f'{helpers.ts_to_date(end_ts)} {end_ts}')
@@ -101,11 +106,11 @@ class data_download_store:
             self.cleanup()
             return None
 
-        # table present and delete flag is on
+        # Table present and delete flag is on
         if self.conn_db.table_in_db(self.table_name) and delete_existing_table:
             self.conn_db.table_delete(self.table_name)
 
-        #  Try to create table. Will do nothing and return True if table already there.
+        # Try to create table. Will do nothing and return True if table already there.
         if not self.conn_db.table_create(self.table_name):
             self.cleanup()
             return None
@@ -128,25 +133,24 @@ class data_download_store:
 
     def get_candles(self, start_ts: int, end_ts: int,
                     reversed_order=True,
-                    delete_existing_table=False):
+                    delete_existing_table=False) -> list:
         """
-        :param start_ts:
-        :param end_ts:
-        :param reversed_order:
-        :param delete_existing_table:
-        :return:
-        returns candles with open_time fall in: start_ts <= open_time <= end_ts
-        if reversed_order = True, candles are sorted from newer to older, the list be [new, old]
-        it is needed to pop older first from list
-        returns a list of (open_time, open, high, low, close, volume, close_time,
-        quote_vol, num_trades, buy_base_vol, buy_quote_vol)
-        quote_vol, num_trades, buy_base_vol, buy_quote_vol)
-        exceptions scheme:
-        this function raises no exceptions, tries to catch all, and returns None if exception
-        interval_to_milliseconds : None
+        Returns candles with open_time fall in: start_ts <= open_time <= end_ts.
+        If reversed_order = True, candles are sorted from newer to older, the list be [new, old].
+        It is needed to pop older first from list.
+        Returns a list of (open_time, open, high, low, close, volume, close_time,
+        quote_vol, num_trades, buy_base_vol, buy_quote_vol).
+        Exceptions scheme:
+        this function raises no exceptions, tries to catch all, and returns None if caught an exception.
+
+        :param start_ts: starting timestamp in milliseconds
+        :param end_ts: end timestamp in milliseconds
+        :param reversed_order: True if you need oldest candles first
+        :param delete_existing_table: or not?
+        :return: list of tuples
         """
 
-        fetch = None
+        fetch = None  # Result we are going to return
         self.prepare_initial_conditions(start_ts, end_ts, delete_existing_table)
 
         gaps = self.get_gaps()
@@ -155,14 +159,15 @@ class data_download_store:
             self.cleanup()
             return None
 
-        # get when last entry was added to the table, need this for printing report of how many candles were written
-        # in case of error returns 0
+        #  Get when last entry was added to the table, need this for printing report of how many candles were written.
+        #  In case of error returns 0.
         last_entry_id = self.conn_db.get_latest_id(self.table_name)
 
-        if gaps:  # if there are gaps in a period of interest
+        if gaps:  #  If there are gaps in a period of interest.
             print(' found gaps:')
             for gap in gaps:
                 print(f' {gap[0]} {helpers.ts_to_date(gap[0])} - {helpers.ts_to_date(gap[1])} {gap[1]}')
+
             for gap in gaps:
                 print(f'  loading gap from exchange: {gap[0]} {helpers.ts_to_date(gap[0])} - '
                       f'{helpers.ts_to_date(gap[1])} {gap[1]}')
@@ -177,20 +182,16 @@ class data_download_store:
         if count_written:
             print(f'wrote {count_written} candles to db')
 
-        #  ok, we tried to get data from exchange, now just fetch from database:
+        # Ok, we tried to get data from exchange, now just fetch from database:
         logger.debug('reading from db: conn_db.read()')
         fetch = self.conn_db.read(self.table_name, self.start_ts, self.end_ts, reversed_order=reversed_order)
         if fetch:
             print(f'fetched {len(fetch)} candles from the database')
-
         self.cleanup()
-
         return fetch
 
     async def get_write_candles(self, gap_start, gap_end):
-
-        #  return None if fails, else return True
-
+        #  Return None if fails, else return True
         #  Create the Binance client, no need for api key.
         try:
             self.exchange_client = await AsyncClient.create(requests_params={"timeout": 60})
@@ -199,21 +200,21 @@ class data_download_store:
             self.cleanup()
             return None
 
-        # get when last entry was added to the table, need this to print out a final report
+        # Get when last entry was added to the table, need this to print out a final report.
         last_entry_id = self.conn_db.get_latest_id(self.table_name)
 
-        #  break the timeline of interest into periods, each period will get it's own concurrent worker
+        # Break the timeline of interest into periods, each period will get it's own concurrent worker.
         periods = self.get_limit_intervals(gap_start, gap_end)
 
         #  If we have too many concurrent requests at the same time, some of them get timeouted.
-        #  In order to handle theese, we run timeouted requests again. And again. Unless there is decrease in their number.
+        #  In order to handle theese, we run timeouted requests again. Unless there is decrease in their number.
         #  Actually, this is an overkill, because if we don't go with more then 50 concurrent tasks at a time,
         #  it is very unlikely to get a timeout error.
         #  I just wanted to be shure I squeezed every little piece of data out of the exchange.
         i = 1
         while True:
-            # gather_write_candles packs all async tasks together
-            # each task downloads and writes to DB some data (one period, each obtained by get_limit_intervals)
+            # Gather_write_candles packs all async tasks together.
+            # Each task downloads and writes to DB some data (one period, each obtained by get_limit_intervals).
             timeout_gaps = await self.gather_write_candles(periods)
             if (
                     not timeout_gaps or  # Stop cycle if we recieve no timeout errors from exchange.
@@ -237,14 +238,16 @@ class data_download_store:
 
         await self.exchange_client.close_connection()
 
-        # send OK signal to get_candles method
+        # send OK signal to get_candles() method
         return True
 
     def get_limit_intervals(self, gap_start, gap_end):
-        # splits time from gap_start to gap_end into intervals, each interval is for one api request
-        # like[[start, end], [start2, end2], ...], end - start = interval_ms*limit
-        # limit = number of candles fetched per 1 API request
-        # interval_ms = candle "width"
+        """
+        Splits time from gap_start to gap_end into intervals, each interval is for one api request,
+        like[[start, end], [start2, end2], ...], end - start = interval_ms*limit.
+        limit = number of candles fetched per 1 API request
+        interval_ms = candle "width"
+        """
         intervals = []
         int_start = gap_start
         while int_start <= gap_end:
@@ -255,10 +258,13 @@ class data_download_store:
             int_start = int_end + 1
         return intervals
 
-    async def gather_write_candles(self, periods):
-
+    async def gather_write_candles(self, periods: list):
+        """
+        Initialises concurrent tasks, each with it's own time period, then packs them all together.
+        :param periods: list of periods
+        :return: faulty time gaps that were not filled with data due to some errors (exchange timeout)
+        """
         sem = asyncio.Semaphore(self.max_coroutines)
-
         async def sem_task(task):
             async with sem:
                 return await task
@@ -284,9 +290,13 @@ class data_download_store:
 
         return timeout_gaps
 
-    async def write_candles(self, period_start, period_end):
-
-        # load candles from exchange
+    async def write_candles(self, period_start: int, period_end: int):
+        """
+        Load candles from exchange, then writes to database.
+        :param period_start: timestamp in ms
+        :param period_end: timestamp in ms
+        :return: Nothing. It writes to database.
+        """
         temp_data, timeout_gap = await self.download_candles(period_start, period_end)
 
         try:
@@ -314,30 +324,30 @@ class data_download_store:
             else:
                 return (None, timeout_gap)
 
-    async def download_candles(self, period_start, period_end):
-
+    async def download_candles(self, period_start: int, period_end: int):
         """
-            candles with open_time >= start_ts included
-            candles with open_time <= end_ts included
-            https://python-binance.readthedocs.io/en/latest/binance.html#binance.client.Client.get_klines
-            binance API returns the following klines:
+        Download candles from binance.
+        Candles with open_time >= start_ts are included.
+        Candles with open_time <= end_ts are included too.
+        https://python-binance.readthedocs.io/en/latest/binance.html#binance.client.Client.get_klines
+        Binance API returns the following:
+        [
             [
-                [
-                    1499040000000,      # Open time
-                    "0.01634790",       # Open
-                    "0.80000000",       # High
-                    "0.01575800",       # Low
-                    "0.01577100",       # Close
-                    "148976.11427815",  # Volume
-                    1499644799999,      # Close time
-                    "2434.19055334",    # Quote asset volume
-                    308,                # Number of trades
-                    "1756.87402397",    # Taker buy base asset volume
-                    "28.46694368",      # Taker buy quote asset volume
-                    "17928899.62484339" # Can be ignored
-                ]
+                1499040000000,      # Open time
+                "0.01634790",       # Open
+                "0.80000000",       # High
+                "0.01575800",       # Low
+                "0.01577100",       # Close
+                "148976.11427815",  # Volume
+                1499644799999,      # Close time
+                "2434.19055334",    # Quote asset volume
+                308,                # Number of trades
+                "1756.87402397",    # Taker buy base asset volume
+                "28.46694368",      # Taker buy quote asset volume
+                "17928899.62484339" # Can be ignored
             ]
-            """
+        ]
+        """
         temp_data = None
         rounded_count = 0
         timeout_gap = []

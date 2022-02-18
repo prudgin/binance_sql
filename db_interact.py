@@ -1,5 +1,6 @@
 import sys
 import logging
+import aiohttp
 import mysql.connector as mysql_connector
 
 import exceptions
@@ -54,7 +55,7 @@ class ConnectionDB:
 
     def create_database(self, db_name: str):
         try:
-            with connect(
+            with mysql_connector.connect(
                     host=self.host,
                     user=self.user,
                     password=self.password,
@@ -240,12 +241,14 @@ class ConnectionDB:
 
     def check_number_candles_in_period(self, table_name, interval_ms, start, end, time_col_name='open_time'):
         start, end = helpers.round_timings(start, end, interval_ms)
-        #  Count number of candles between start and end. If all candles are in place, return True.
+        # Count number of candles between start and end. If all candles are in place, return True.
+        # BETWEEN includes borders (start and end)
         count_request = f"""
                             SELECT COUNT({time_col_name}) FROM {table_name}
                             WHERE {time_col_name} BETWEEN {start} AND {end}
                         """
         entry_count = self.execute_query(count_request, fetch_one=True)
+        # +1 because a candle open_time can be equal end, and this candle should be counted
         if entry_count and entry_count[0] == (end - start) / interval_ms + 1:
             return True
         return None
