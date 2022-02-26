@@ -3,8 +3,8 @@ import logging
 import aiohttp
 import mysql.connector as mysql_connector
 
-import exceptions
-import helpers
+import binance_sql.exceptions as exceptions
+import binance_sql.helpers as helpers
 
 """
 This module contains a ConnectionDB class, that holds multiple methods, used to interact with a database.

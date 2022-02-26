@@ -8,10 +8,10 @@ import aiohttp
 from binance import exceptions as pybin_exceptions
 from binance.client import AsyncClient, Client
 
-import db_interact as db
-import exceptions
+import binance_sql.db_interact as db
+import binance_sql.exceptions as exceptions
 import spooky
-import helpers
+import binance_sql.helpers as helpers
 
 """
 This module downloads historical data from binance via API, writes it to the MySQL database, then returns data.
@@ -84,9 +84,14 @@ class data_manager:
         print(f'requested candles from {start_ts} {helpers.ts_to_date(start_ts)} to '
               f'{helpers.ts_to_date(end_ts)} {end_ts}')
 
+        # Requested end is in future
+        if end_ts > int(time.time() * 1000):
+            end_ts = int(time.time() * 1000)
+            logger.warning(f'end date is in future, adjusting to now: {helpers.ts_to_date(end_ts)}')
+
         # if end_ts == start_ts, still one candle with open_time = start_ts will be returned
-        if end_ts < start_ts:
-            logger.warning('interval between requested start an end dates < chart interval, abort')
+        if start_ts > end_ts:
+            logger.warning('start date > end date, abort')
             self.cleanup()
             return None
 
@@ -151,7 +156,10 @@ class data_manager:
         """
 
         fetch = None  # Result we are going to return
-        self.prepare_initial_conditions(start_ts, end_ts, delete_existing_table)
+        if not self.prepare_initial_conditions(start_ts, end_ts, delete_existing_table):
+            logger.error('failed to initialise, returning None')
+            self.cleanup()
+            return None
 
         gaps = self.get_gaps()
         if gaps is None:  # get_gaps function encountered an error
