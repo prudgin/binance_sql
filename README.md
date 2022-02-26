@@ -38,7 +38,7 @@ conn_creds = {
         'database': 'DB_name'
     }
 
-candle_getter = ghd.data_manager('BTCUSDT', '1d')
+candle_getter = hst.data_manager('BTCUSDT', '1d')
 candle_getter.set_database_credentials(**conn_creds)
 
 start = hlp.date_to_milliseconds('25 Nov 2018')
